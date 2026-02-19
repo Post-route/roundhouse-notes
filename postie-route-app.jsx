@@ -470,6 +470,16 @@ const speakStop = (s) => {
   speak(`${prefix} ${name}. ${pc ? "Postcode " + pc + "." : ""}${noteSpeech}`);
 };
 
+// Search helpers
+const normalise = s => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+const searchStops = (query, stops) => {
+  const q = normalise(query);
+  if (!q) return [];
+  return stops.filter(s =>
+    (normalise(s.name) + " " + normalise(s.note) + " " + normalise(s.postcode)).includes(q)
+  );
+};
+
 // Human-readable label from QR box ID: "RUAN_POST_OFFICE" → "Ruan Post Office"
 const boxLabel = (qrId) =>
   qrId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
@@ -858,15 +868,9 @@ export default function PostieApp() {
     );
   }, [stops, frameNum, frameQuery]);
 
-  // Search
+  // Search — name + note + postcode
   useEffect(() => {
-    if (!searchQuery.trim()) { setSearchResults([]); return; }
-    const q = searchQuery.toLowerCase();
-    const results = stops.filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.postcode.toLowerCase().includes(q)
-    );
-    setSearchResults(results);
+    setSearchResults(searchStops(searchQuery, stops));
   }, [searchQuery, stops]);
 
   // Persist position + completions to localStorage on every change
@@ -1275,9 +1279,15 @@ export default function PostieApp() {
           <div style={{padding:"16px 16px 100px"}}>
             <input
               style={styles.searchInput}
-              placeholder="Search by name or postcode…"
+              placeholder="Search name, street, note, postcode…"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                const first = searchResults[0];
+                if (first) { goTo(stops.findIndex(x => x.n === first.n)); setSearchQuery(""); }
+                else speak("No match.");
+              }}
               autoFocus
             />
             {searchQuery && (
