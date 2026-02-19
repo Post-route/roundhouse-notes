@@ -372,6 +372,36 @@ const ROUTES = {
   }
 };
 
+// ── POSTCODE COORDINATES (geocoded via postcodes.io) ────────────────────────
+const PC_COORDS = {
+  "TR12 7TL": [50.001, -5.222],   // Eglos Farm approx
+  "TR12 7LH": [49.994426, -5.215946],
+  "TR12 7LW": [49.997714, -5.200521],
+  "TR12 7JR": [49.995678, -5.189528],
+  "TR12 7GF": [49.996459, -5.190249],
+  "TR12 7LS": [50.001118, -5.186371],
+  "TR12 7JP": [49.995171, -5.186703],
+  "TR12 7JN": [49.993849, -5.182429],
+  "TR12 7JL": [49.994145, -5.180816],
+  "TR12 7JT": [49.991932, -5.182791],
+  "TR12 7JU": [49.987980, -5.179614],
+  "TR12 7JX": [49.987468, -5.179887],
+  "TR12 7JY": [49.987621, -5.180902],
+  "TR12 7JZ": [49.988567, -5.182457],
+  "TR12 7LD": [49.988268, -5.183205],
+  "TR12 7LQ": [49.985690, -5.196457],
+  "TR12 7LA": [49.986707, -5.182055],
+  "TR12 7LB": [49.985648, -5.184581],
+  "TR12 7JS": [49.991950, -5.187355],
+  "TR12 7LR": [49.997702, -5.177101],
+  "TR12 7LU": [50.001687, -5.179737],
+  "TR12 7LY": [50.005236, -5.177612],
+  "TR12 7LX": [50.004263, -5.175007],
+  "TR12 7LT": [50.004199, -5.170453],
+  "TR12 7NA": [50.006346, -5.193529],
+  "TR12 7NB": [50.013573, -5.204828],
+};
+
 // ── NOTE CLASSIFIERS ────────────────────────────────────────────────────────
 const getNoteType = (note) => {
   if (!note) return null;
@@ -386,14 +416,58 @@ const getNoteType = (note) => {
 const NOTE_ICONS = { dog:"🐕", postbox:"📬", hazard:"⚠️", newbuild:"🏗️", info:"💬" };
 const NOTE_COLORS = { dog:"#e05252", postbox:"#e87e2e", hazard:"#f5c518", newbuild:"#4caf8d", info:"#6ea8d8" };
 
+const OUTCOME_ICONS  = { delivered:"✅", no_access:"🚫", no_answer:"🔔", neighbour:"🤝" };
+const OUTCOME_LABELS = { delivered:"Delivered", no_access:"No access", no_answer:"No answer", neighbour:"Left with neighbour" };
+
 // ── VOICE ────────────────────────────────────────────────────────────────────
+let preferredVoice = null;
+
+const pickVoice = () => {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  // Prefer female UK voices; fall back to female US rather than male Daniel
+  preferredVoice =
+    voices.find(v => v.name === "Kate") ||      // iOS UK female (if downloaded)
+    voices.find(v => v.name === "Serena") ||    // iOS UK alt female
+    voices.find(v => v.name === "Samantha") ||  // iOS US female (beats Daniel)
+    voices.find(v => v.lang === "en-GB" && !v.name.toLowerCase().includes("daniel")) ||
+    voices.find(v => v.lang.startsWith("en") && !v.name.toLowerCase().includes("daniel")) ||
+    voices.find(v => v.lang.startsWith("en")) ||
+    null;
+  return preferredVoice;
+};
+
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = pickVoice;
+  setTimeout(pickVoice, 100);
+  setTimeout(pickVoice, 800); // iOS sometimes loads voices late
+}
+
 const speak = (text) => {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
+  if (!("speechSynthesis" in window) || !text) return;
+  if (!preferredVoice) pickVoice();
   const u = new SpeechSynthesisUtterance(text);
-  u.rate = 0.95;
-  u.pitch = 1;
-  window.speechSynthesis.speak(u);
+  u.lang = "en-GB";
+  u.voice = preferredVoice || null;
+  u.rate = 0.88;
+  u.pitch = 1.1;
+  u.volume = 1;
+  window.speechSynthesis.cancel();
+  // iOS needs a tick after cancel() or speech silently fails
+  setTimeout(() => window.speechSynthesis.speak(u), 60);
+};
+
+const speakStop = (s) => {
+  if (!s) return;
+  const name = String(s.name || "").trim();
+  const pc = String(s.postcode || "").trim().toUpperCase();
+  const note = String(s.note || "").trim();
+  const prefix = s.type === "collection" ? "Collection." : "Stop.";
+  const noteSpeech = note
+    ? " Notes: " + note.replace(/\n+/g, ". ").replace(/;/g, ". ")
+    : "";
+  speak(`${prefix} ${name}. ${pc ? "Postcode " + pc + "." : ""}${noteSpeech}`);
 };
 
 // Human-readable label from QR box ID: "RUAN_POST_OFFICE" → "Ruan Post Office"
@@ -409,6 +483,181 @@ const loadJsQR = () => new Promise((resolve, reject) => {
   s.onerror = () => reject(new Error("jsQR failed to load"));
   document.head.appendChild(s);
 });
+
+// ── Leaflet CDN loader ───────────────────────────────────────────────────────
+const loadLeaflet = () => new Promise((resolve, reject) => {
+  if (window.L) { resolve(window.L); return; }
+  if (!document.getElementById("leaflet-css")) {
+    const link = document.createElement("link");
+    link.id = "leaflet-css";
+    link.rel = "stylesheet";
+    link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(link);
+  }
+  const s = document.createElement("script");
+  s.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+  s.onload = () => resolve(window.L);
+  s.onerror = () => reject(new Error("Leaflet failed to load"));
+  document.head.appendChild(s);
+});
+
+// Fan stops that share the same postcode centroid into a small circle
+function jitterAround(lat, lng, k, i) {
+  if (k <= 1) return [lat, lng];
+  const r = 16; // spread radius in metres
+  const angle = (2 * Math.PI * i) / k;
+  const dLat = (r / 111111) * Math.cos(angle);
+  const dLng = (r / (111111 * Math.cos((lat * Math.PI) / 180))) * Math.sin(angle);
+  return [lat + dLat, lng + dLng];
+}
+
+function markerStyle(s, isCurrent) {
+  if (isCurrent)           return { radius: 10, color: "#E21A22", fillColor: "#E21A22", fillOpacity: 1, weight: 3 };
+  if (s.type === "adhoc")  return { radius: 6,  color: "#7c3aed", fillColor: "#a78bfa", fillOpacity: 0.9, weight: 1.5 };
+  if (s.type === "collection") return { radius: 5, color: "#e87e2e", fillColor: "#e87e2e", fillOpacity: 1, weight: 1.5 };
+  return { radius: 5, color: "#1d4ed8", fillColor: "#fff", fillOpacity: 1, weight: 1.5 };
+}
+
+// ── SPEECH RECOGNITION ───────────────────────────────────────────────────────
+const recognise = () => new Promise((resolve, reject) => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { reject(new Error("not supported")); return; }
+  const r = new SR();
+  r.lang = "en-GB";
+  r.interimResults = false;
+  r.maxAlternatives = 1;
+  r.onresult = e => resolve(String(e.results[0][0].transcript).trim());
+  r.onerror = e => reject(new Error(e.error));
+  r.onnomatch = () => reject(new Error("no match"));
+  r.start();
+});
+
+// ── MAP VIEW COMPONENT ───────────────────────────────────────────────────────
+function MapView({ stops, currentStop, onGoTo }) {
+  const divRef = useRef(null);
+  const stateRef = useRef({ map: null, L: null, markerMap: new Map(), prevIdx: null, gpsDot: null, gpsAcc: null, gpsWatchId: null });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [gpsOn, setGpsOn] = useState(false);
+  const missingCount = stops.filter(s => s.type !== "adhoc" && !PC_COORDS[s.postcode]).length;
+
+  // Init map once
+  useEffect(() => {
+    let cancelled = false;
+    const st = stateRef.current;
+    loadLeaflet().then(L => {
+      if (cancelled || !divRef.current || st.map) return;
+      st.L = L;
+      const map = L.map(divRef.current, { zoomControl: true });
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+      st.map = map;
+
+      // Group stops by postcode centroid key (adhoc use GPS coords directly)
+      const groups = new Map();
+      stops.forEach((s, idx) => {
+        const c = (s.type === "adhoc" && s.lat && s.lng) ? [s.lat, s.lng] : PC_COORDS[s.postcode];
+        if (!c) return;
+        const key = `${c[0].toFixed(6)},${c[1].toFixed(6)}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({ s, idx, lat: c[0], lng: c[1] });
+      });
+
+      const allCoords = [];
+      groups.forEach(arr => {
+        arr.forEach(({ s, idx, lat, lng }, i) => {
+          const [jLat, jLng] = jitterAround(lat, lng, arr.length, i);
+          allCoords.push([jLat, jLng]);
+          const isCurrent = idx === currentStop;
+          const m = L.circleMarker([jLat, jLng], markerStyle(s, isCurrent))
+            .addTo(map)
+            .on("click", () => onGoTo(idx));
+          st.markerMap.set(idx, m);
+        });
+      });
+
+      st.prevIdx = currentStop;
+      if (allCoords.length) map.fitBounds(L.latLngBounds(allCoords), { padding: [24, 24] });
+      setLoading(false);
+    }).catch(e => { if (!cancelled) { setError(String(e.message)); setLoading(false); } });
+
+    return () => {
+      cancelled = true;
+      const st = stateRef.current;
+      if (st.gpsWatchId != null) { navigator.geolocation.clearWatch(st.gpsWatchId); st.gpsWatchId = null; }
+      if (st.map) { st.map.remove(); st.map = null; st.markerMap = new Map(); st.gpsDot = null; st.gpsAcc = null; }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Update current stop marker + pan
+  useEffect(() => {
+    const { map, markerMap, prevIdx } = stateRef.current;
+    if (!map) return;
+    // Reset previous
+    if (prevIdx != null && prevIdx !== currentStop) {
+      const prev = markerMap.get(prevIdx);
+      if (prev) prev.setStyle(markerStyle(stops[prevIdx], false));
+    }
+    // Highlight current
+    const cur = markerMap.get(currentStop);
+    if (cur) {
+      cur.setStyle(markerStyle(stops[currentStop], true));
+      map.panTo(cur.getLatLng(), { animate: true });
+    }
+    stateRef.current.prevIdx = currentStop;
+  }, [currentStop, stops]);
+
+  // GPS toggle
+  const toggleGPS = () => {
+    const { map, L } = stateRef.current;
+    if (!map || !L) return;
+    const st = stateRef.current;
+
+    if (gpsOn) {
+      if (st.gpsWatchId != null) { navigator.geolocation.clearWatch(st.gpsWatchId); st.gpsWatchId = null; }
+      if (st.gpsDot) { map.removeLayer(st.gpsDot); st.gpsDot = null; }
+      if (st.gpsAcc) { map.removeLayer(st.gpsAcc); st.gpsAcc = null; }
+      setGpsOn(false);
+      return;
+    }
+
+    if (!("geolocation" in navigator)) { alert("Geolocation not available."); return; }
+    setGpsOn(true);
+
+    st.gpsWatchId = navigator.geolocation.watchPosition(pos => {
+      const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+      if (!st.gpsDot) {
+        st.gpsDot = L.circleMarker([lat, lng], { radius: 8, color: "#2563eb", fillColor: "#60a5fa", fillOpacity: 0.9, weight: 2 }).addTo(map);
+        st.gpsAcc  = L.circle([lat, lng], { radius: Math.max(accuracy, 5), color: "#2563eb", fillColor: "#93c5fd", fillOpacity: 0.15, weight: 1 }).addTo(map);
+      } else {
+        st.gpsDot.setLatLng([lat, lng]);
+        st.gpsAcc.setLatLng([lat, lng]);
+        st.gpsAcc.setRadius(Math.max(accuracy, 5));
+      }
+    }, err => { alert(err.message || "GPS error"); setGpsOn(false); },
+    { enableHighAccuracy: true, maximumAge: 4000, timeout: 15000 });
+  };
+
+  return (
+    <div>
+      {loading && <div style={{padding:"20px 16px", color:MUTED, fontSize:"13px"}}>Loading map…</div>}
+      {error && <div style={{padding:"20px 16px", color:"#e05252", fontSize:"13px"}}>Map error: {error}</div>}
+      {!loading && missingCount > 0 && (
+        <div style={{padding:"6px 16px", fontSize:"11px", color:"#e87e2e", background:"#fff8f0", borderBottom:"1px solid #f0e0cc"}}>
+          ⚠ {missingCount} stop(s) have no map coords
+        </div>
+      )}
+      {!loading && (
+        <div style={{padding:"6px 12px", display:"flex", gap:"8px", borderBottom:`1px solid ${BORDER}`, background:CARD}}>
+          <button onClick={toggleGPS} style={{fontSize:"12px", padding:"5px 12px", borderRadius:"6px", border:`1px solid ${gpsOn ? "#2563eb" : BORDER}`, background: gpsOn ? "#eff6ff" : CARD, color: gpsOn ? "#2563eb" : MUTED, cursor:"pointer", fontWeight:600}}>
+            {gpsOn ? "📍 Tracking" : "📍 Show me"}
+          </button>
+          <div style={{fontSize:"11px", color:MUTED, alignSelf:"center"}}>🔴 current · 🔵 stop · 🟠 collection · 🟣 added</div>
+        </div>
+      )}
+      <div ref={divRef} style={{width:"100%", height:`calc(100vh - ${loading ? 148 : (missingCount > 0 ? 202 : 184)}px)`, visibility: loading ? "hidden" : "visible"}} />
+    </div>
+  );
+}
 
 // ── QR SCANNER COMPONENT ─────────────────────────────────────────────────────
 function QRScanView({ onScan }) {
@@ -543,18 +792,41 @@ function QRScanView({ onScan }) {
 
 // ── MAIN APP ────────────────────────────────────────────────────────────────
 export default function PostieApp() {
-  const [activeRouteId, setActiveRouteId] = useState("route-14");
-  const [currentStop, setCurrentStop] = useState(0); // 0-indexed
+  const [activeRouteId] = useState("route-14");
+  const [currentStop, setCurrentStop] = useState(() => {
+    try { const v = parseInt(localStorage.getItem("postie-stop") || "0", 10); return isNaN(v) ? 0 : v; }
+    catch { return 0; }
+  });
   const [view, setView] = useState("walk"); // "walk" | "search" | "list" | "routes" | "scan"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
-  const [completed, setCompleted] = useState(new Set());
+  const [completed, setCompleted] = useState(() => {
+    try { const raw = localStorage.getItem("postie-completed"); return raw ? new Set(JSON.parse(raw)) : new Set(); }
+    catch { return new Set(); }
+  });
   const [frameNum, setFrameNum] = useState(1);
   const [frameQuery, setFrameQuery] = useState("");
+  const [events, setEvents] = useState(() => {
+    try { const raw = localStorage.getItem("postie-events"); return raw ? JSON.parse(raw) : []; }
+    catch { return []; }
+  });
+  // Show resume banner only when app loads with a saved non-zero position
+  const [resumed, setResumed] = useState(() => {
+    try { return parseInt(localStorage.getItem("postie-stop") || "0", 10) > 0; }
+    catch { return false; }
+  });
   const activeRef = useRef(null);
 
   const route = ROUTES[activeRouteId];
-  const stops = route.stops;
+  const [stops, setStops] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("postie-stops-v1") || "null");
+      if (Array.isArray(saved) && saved.length) return saved;
+    } catch {}
+    return route.stops;
+  });
+  const [adhocPhase, setAdhocPhase] = useState(null); // null | "gps" | "listening" | "done"
+
   const stop = stops[currentStop];
   const prevStop = currentStop > 0 ? stops[currentStop - 1] : null;
   const nextStop = currentStop < stops.length - 1 ? stops[currentStop + 1] : null;
@@ -597,6 +869,23 @@ export default function PostieApp() {
     setSearchResults(results);
   }, [searchQuery, stops]);
 
+  // Persist position + completions to localStorage on every change
+  useEffect(() => {
+    try { localStorage.setItem("postie-stop", String(currentStop)); } catch {}
+  }, [currentStop]);
+
+  useEffect(() => {
+    try { localStorage.setItem("postie-completed", JSON.stringify([...completed])); } catch {}
+  }, [completed]);
+
+  useEffect(() => {
+    try { localStorage.setItem("postie-events", JSON.stringify(events)); } catch {}
+  }, [events]);
+
+  useEffect(() => {
+    try { localStorage.setItem("postie-stops-v1", JSON.stringify(stops)); } catch {}
+  }, [stops]);
+
   const markCompleted = (n) => {
     setCompleted(prev => {
       const next = new Set(prev);
@@ -610,6 +899,105 @@ export default function PostieApp() {
     setView("walk");
   };
 
+  const startOver = () => {
+    setCurrentStop(0);
+    setCompleted(new Set());
+    setEvents([]);
+    setResumed(false);
+    try { localStorage.removeItem("postie-stop"); localStorage.removeItem("postie-completed"); localStorage.removeItem("postie-events"); } catch {}
+  };
+
+  const logOutcome = (kind) => {
+    const stopN = stops[currentStop].n;
+    const now = Date.now();
+    setEvents(prev => {
+      if (prev.find(e => e.stop === stopN && e.kind === kind && now - e.ts < 10000)) return prev;
+      return [...prev, { ts: now, routeId: activeRouteId, stop: stopN, kind }];
+    });
+    if (kind === "neighbour") {
+      setCompleted(prev => { const n = new Set(prev); n.add(stopN); return n; });
+    }
+    speak(OUTCOME_LABELS[kind] + " logged.");
+  };
+
+  const addHouseAfterCurrentStop = async () => {
+    if (adhocPhase) return; // already in progress
+    setAdhocPhase("gps");
+    speak("Getting position.");
+    let lat, lng;
+    try {
+      const pos = await new Promise((res, rej) =>
+        navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 })
+      );
+      lat = pos.coords.latitude;
+      lng = pos.coords.longitude;
+    } catch (e) {
+      setAdhocPhase(null);
+      alert(e?.message || "GPS unavailable — try outside.");
+      return;
+    }
+    setAdhocPhase("listening");
+    speak("Say the name.");
+    let name = "";
+    try {
+      name = await recognise();
+    } catch {
+      name = (window.prompt("House name (e.g. Rose Cottage behind farm):") || "").trim();
+    }
+    if (!name) { setAdhocPhase(null); return; }
+    const newStop = { n: Date.now(), name, postcode: "", type: "adhoc", lat, lng };
+    setStops(prev => {
+      const next = [...prev];
+      next.splice(currentStop + 1, 0, newStop);
+      return next;
+    });
+    setCurrentStop(i => i + 1);
+    setAdhocPhase("done");
+    speak("Added: " + name);
+    setTimeout(() => setAdhocPhase(null), 2000);
+  };
+
+  const copySummary = () => {
+    const date = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const counts = {};
+    events.forEach(e => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    let text = `${route.name}\n${date}\n\n`;
+    text += `Delivered: ${completed.size}\n`;
+    if (counts.no_access) text += `No access: ${counts.no_access}\n`;
+    if (counts.no_answer) text += `No answer: ${counts.no_answer}\n`;
+    if (counts.neighbour) text += `Left with neighbour: ${counts.neighbour}\n`;
+    if (events.length) {
+      text += `\nEXCEPTIONS:\n`;
+      events.forEach(e => {
+        const s = stops.find(st => st.n === e.stop);
+        const t = new Date(e.ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+        text += `• #${e.stop} ${s?.name || "?"} ${s?.postcode || ""} – ${OUTCOME_LABELS[e.kind]} (${t})\n`;
+      });
+    }
+    try { navigator.clipboard.writeText(text).then(() => speak("Summary copied."), () => alert(text)); }
+    catch { alert(text); }
+  };
+
+  const exportJSON = () => {
+    const data = { route: activeRouteId, date: new Date().toISOString(), completed: [...completed], events };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `postie-route14-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const resetDay = () => {
+    if (!confirm("Reset today's log? Clears deliveries and exceptions, keeps your route.")) return;
+    setCompleted(new Set());
+    setEvents([]);
+    setCurrentStop(0);
+    setResumed(false);
+    try { localStorage.removeItem("postie-completed"); localStorage.removeItem("postie-events"); localStorage.removeItem("postie-stop"); } catch {}
+  };
+
   // ── QR HANDLER ──────────────────────────────────────────────────────────────
   // Normalise postcode: strip spaces, uppercase → "TR127LH"
   const normPc = (s) => s.toUpperCase().replace(/\s+/g, "");
@@ -619,32 +1007,29 @@ export default function PostieApp() {
 
     if (raw.startsWith("BOX:")) {
       const id = raw.slice(4).trim();
-      const label = boxLabel(id);
       const idx = stops.findIndex(s => s.qr === id);
-      const note = idx >= 0 ? stops[idx].note : "";
-      speak(`Collection. ${label}. ${note || "Check pouch and insert returns."}`);
+      const matched = idx >= 0 ? stops[idx] : null;
+      speakStop(matched || { name: boxLabel(id), postcode: "", note: "Check pouch and insert returns.", type: "collection" });
       if (idx >= 0) setCurrentStop(idx);
       setView("walk");
 
     } else if (raw.startsWith("STOP:")) {
       const pc = normPc(raw.slice(5));
-      const idx = stops.findIndex(s => normPc(s.postcode) === pc);
+      const idx = stops.findIndex(s => normPc(String(s.postcode || "")) === pc);
       if (idx >= 0) {
-        const s = stops[idx];
-        speak(`Stop ${s.n}. ${s.name}. ${s.note || ""}`);
+        speakStop(stops[idx]);
         setCurrentStop(idx);
         setView("walk");
       } else {
-        speak(`Postcode not found on this route.`);
+        speak("Postcode not found on this route.");
       }
 
     } else {
       // Last-ditch: treat raw as a bare postcode
       const pc = normPc(raw);
-      const idx = stops.findIndex(s => normPc(s.postcode) === pc);
+      const idx = stops.findIndex(s => normPc(String(s.postcode || "")) === pc);
       if (idx >= 0) {
-        const s = stops[idx];
-        speak(`Stop ${s.n}. ${s.name}. ${s.note || ""}`);
+        speakStop(stops[idx]);
         setCurrentStop(idx);
         setView("walk");
       } else {
@@ -701,7 +1086,7 @@ export default function PostieApp() {
 
       {/* NAV TABS */}
       <div style={styles.tabs}>
-        {[["walk","🚶"],["scan","📷"],["frames","🗂"],["search","🔍"],["list","📋"],["routes","🗺"]].map(([id, label]) => (
+        {[["walk","🚶"],["scan","📷"],["frames","🗂"],["search","🔍"],["list","📋"],["routes","🗺"],["summary","📊"]].map(([id, label]) => (
           <button key={id} style={{...styles.tab, ...(view===id ? styles.tabActive : {})}} onClick={() => setView(id)}>
             {label}
           </button>
@@ -763,7 +1148,7 @@ export default function PostieApp() {
                 <div
                   key={s.n}
                   style={{...styles.frameItem, ...(completed.has(s.n) ? styles.frameItemDone : {})}}
-                  onClick={() => goTo(s.n - 1)}
+                  onClick={() => goTo(stops.findIndex(x => x.n === s.n))}
                 >
                   <div style={styles.frameItemLeft}>
                     <div style={styles.frameItemName}>{s.name}</div>
@@ -783,23 +1168,66 @@ export default function PostieApp() {
         {/* ── WALK VIEW ── */}
         {view === "walk" && (
           <div style={{padding:"16px 16px 100px"}}>
-            {/* Stop card */}
-            <div className="stop-card" key={stop.n} style={styles.stopCard}>
-              <div style={styles.stopNumber}>#{stop.n}</div>
-              <div style={styles.stopName}>{stop.name}</div>
-              <div style={styles.stopPostcode}>{stop.postcode}</div>
-              {stop.note && (
-                <div style={{...styles.noteChip, background: NOTE_COLORS[noteType] + "22", borderColor: NOTE_COLORS[noteType] + "66", color: NOTE_COLORS[noteType]}}>
-                  {NOTE_ICONS[noteType]} {stop.note}
+            {/* Resume banner */}
+            {resumed && (
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", background:"rgba(226,26,34,0.07)", border:`1px solid rgba(226,26,34,0.25)`, borderRadius:"8px", padding:"10px 12px", marginBottom:"14px", gap:"8px"}}>
+                <span style={{fontSize:"12px", color:R, fontWeight:600}}>↩ Resumed at stop {currentStop + 1} of {stops.length}</span>
+                <div style={{display:"flex", gap:"6px"}}>
+                  <button onClick={startOver} style={{fontSize:"11px", color:MUTED, background:"transparent", border:`1px solid ${BORDER}`, borderRadius:"5px", padding:"3px 8px", cursor:"pointer"}}>Start over</button>
+                  <button onClick={() => setResumed(false)} style={{fontSize:"12px", color:MUTED, background:"transparent", border:"none", cursor:"pointer", lineHeight:1}}>✕</button>
                 </div>
-              )}
-              <button
-                style={{...styles.doneBtn, ...(completed.has(stop.n) ? styles.doneBtnActive : {})}}
-                onClick={() => markCompleted(stop.n)}
-              >
-                {completed.has(stop.n) ? "✓ Delivered" : "Mark Delivered"}
-              </button>
-            </div>
+              </div>
+            )}
+            {/* Stop card */}
+            {(() => {
+              const stopExceptions = events.filter(e => e.stop === stop.n && e.kind !== "delivered");
+              return (
+                <div className="stop-card" key={stop.n} style={styles.stopCard}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"5px"}}>
+                    <div style={styles.stopNumber}>#{stop.n}</div>
+                    {stopExceptions.length > 0 && (
+                      <div style={{display:"flex", gap:"4px", flexWrap:"wrap", justifyContent:"flex-end"}}>
+                        {stopExceptions.map((e, i) => (
+                          <span key={i} style={{fontSize:"10px", background:"rgba(232,126,46,0.1)", border:"1px solid rgba(232,126,46,0.3)", color:"#e87e2e", borderRadius:"20px", padding:"2px 7px", fontWeight:600}}>
+                            {OUTCOME_ICONS[e.kind]} {new Date(e.ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {stop.type === "adhoc" && (
+                    <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"8px"}}>
+                      <span style={{fontSize:"10px", background:"rgba(124,58,237,0.1)", color:"#7c3aed", border:"1px solid rgba(124,58,237,0.3)", borderRadius:"20px", padding:"2px 8px", fontWeight:600}}>🟣 Added stop</span>
+                      <button onClick={() => { setStops(prev => prev.filter(s => s.n !== stop.n)); setCurrentStop(c => Math.max(0, c - 1)); }} style={{fontSize:"11px", color:"#e05252", background:"transparent", border:"1px solid rgba(224,82,82,0.3)", borderRadius:"5px", padding:"3px 8px", cursor:"pointer"}}>✕ Remove</button>
+                    </div>
+                  )}
+                  <div style={styles.stopName}>{stop.name}</div>
+                  {stop.postcode && <div style={styles.stopPostcode}>{stop.postcode}</div>}
+                  {stop.note && (
+                    <div style={{...styles.noteChip, background: NOTE_COLORS[noteType] + "22", borderColor: NOTE_COLORS[noteType] + "66", color: NOTE_COLORS[noteType]}}>
+                      {NOTE_ICONS[noteType]} {stop.note}
+                    </div>
+                  )}
+                  <button
+                    style={{...styles.doneBtn, ...(completed.has(stop.n) ? styles.doneBtnActive : {})}}
+                    onClick={() => markCompleted(stop.n)}
+                  >
+                    {completed.has(stop.n) ? "✓ Delivered" : "Mark Delivered"}
+                  </button>
+                  {/* Outcome buttons */}
+                  <div style={{display:"flex", gap:"6px", marginTop:"10px", paddingTop:"10px", borderTop:`1px solid ${FAINT}`}}>
+                    {[{kind:"no_access",label:"🚫 No access"},{kind:"no_answer",label:"🔔 No answer"},{kind:"neighbour",label:"🤝 Neighbour"}].map(({kind, label}) => {
+                      const logged = events.some(e => e.stop === stop.n && e.kind === kind);
+                      return (
+                        <button key={kind} onClick={() => logOutcome(kind)} style={{flex:1, padding:"7px 4px", fontSize:"10px", fontWeight:600, background: logged ? "rgba(232,126,46,0.1)" : "transparent", border:`1px solid ${logged ? "rgba(232,126,46,0.4)" : BORDER}`, borderRadius:"6px", color: logged ? "#e87e2e" : MUTED, cursor:"pointer"}}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Context — prev / next */}
             <div style={styles.contextRow}>
@@ -822,12 +1250,21 @@ export default function PostieApp() {
 
             {/* Nav buttons */}
             <div style={styles.navRow}>
-              <button className="nav-btn" style={{...styles.navBtn, opacity: currentStop===0?0.3:1}} disabled={currentStop===0} onClick={() => setCurrentStop(c => c - 1)}>
+              <button className="nav-btn" style={{...styles.navBtn, opacity: currentStop===0?0.3:1}} disabled={currentStop===0} onClick={() => { const i = currentStop - 1; setCurrentStop(i); speakStop(stops[i]); }}>
                 ← Prev
               </button>
+              <button style={{...styles.navBtn, flex:"none", padding:"13px 14px"}} onClick={() => speakStop(stop)} title="Speak current stop">🔊</button>
               <div style={styles.stopCounter}>{currentStop+1} of {stops.length}</div>
-              <button className="nav-btn" style={{...styles.navBtn, ...styles.navBtnNext, opacity: currentStop===stops.length-1?0.3:1}} disabled={currentStop===stops.length-1} onClick={() => setCurrentStop(c => c + 1)}>
+              <button className="nav-btn" style={{...styles.navBtn, ...styles.navBtnNext, opacity: currentStop===stops.length-1?0.3:1}} disabled={currentStop===stops.length-1} onClick={() => { const i = currentStop + 1; setCurrentStop(i); speakStop(stops[i]); }}>
                 Next →
+              </button>
+              <button
+                onClick={addHouseAfterCurrentStop}
+                disabled={!!adhocPhase}
+                title="Add unlisted house after this stop (GPS + voice)"
+                style={{...styles.navBtn, flex:"none", padding:"13px 14px", background: adhocPhase === "done" ? "#4caf3d" : adhocPhase ? "#f5f0ff" : CARD, borderColor: adhocPhase ? "#7c3aed" : BORDER, color: adhocPhase ? "#7c3aed" : MUTED, opacity: 1}}
+              >
+                {adhocPhase === "gps" ? "📍" : adhocPhase === "listening" ? "🎤" : adhocPhase === "done" ? "✓" : "➕"}
               </button>
             </div>
           </div>
@@ -858,7 +1295,7 @@ export default function PostieApp() {
               </div>
             )}
             {searchResults.map(s => (
-              <div key={s.n} style={styles.searchResult} onClick={() => goTo(s.n - 1)}>
+              <div key={s.n} style={styles.searchResult} onClick={() => goTo(stops.findIndex(x => x.n === s.n))}>
                 <div style={styles.srLeft}>
                   <div style={styles.srNum}>#{s.n}</div>
                   <div>
@@ -885,7 +1322,7 @@ export default function PostieApp() {
                     ref={s.n === stop.n ? activeRef : null}
                     className="list-item"
                     style={{...styles.listItem, ...(s.n === stop.n ? styles.listItemActive : {}), ...(completed.has(s.n) ? styles.listItemDone : {})}}
-                    onClick={() => goTo(s.n - 1)}
+                    onClick={() => goTo(stops.findIndex(x => x.n === s.n))}
                   >
                     <div style={styles.liNum}>{s.n}</div>
                     <div style={styles.liBody}>
@@ -901,46 +1338,69 @@ export default function PostieApp() {
           </div>
         )}
 
-        {/* ── ROUTES VIEW ── */}
+        {/* ── MAP VIEW ── */}
         {view === "routes" && (
-          <div style={{padding:"16px 16px 100px"}}>
-            <div style={styles.sectionTitle}>Active Routes</div>
-            {Object.values(ROUTES).map(r => (
-              <div key={r.id} style={{...styles.routeCard, ...(r.id === activeRouteId ? styles.routeCardActive : {})}} onClick={() => { setActiveRouteId(r.id); setCurrentStop(0); setCompleted(new Set()); setView("walk"); }}>
-                <div style={styles.rcLeft}>
-                  <div style={styles.rcName}>{r.name}</div>
-                  <div style={styles.rcMeta}>{r.stops.length} addresses · {r.depot}</div>
-                  <div style={styles.rcAreas}>{r.areas.slice(0,4).join(", ")}{r.areas.length > 4 ? "…" : ""}</div>
-                </div>
-                {r.id === activeRouteId && <div style={styles.rcActive}>Active</div>}
-              </div>
-            ))}
-
-            {/* Add route placeholder */}
-            <div style={styles.addRoute}>
-              <div style={styles.addRouteIcon}>+</div>
-              <div>
-                <div style={styles.addRouteTitle}>Add New Route</div>
-                <div style={styles.addRouteSub}>Import a route from a text file or paste stop data</div>
-              </div>
-            </div>
-
-            <div style={styles.sectionTitle}>Route Stats</div>
-            <div style={styles.statsGrid}>
-              {[
-                ["Stops", stops.length],
-                ["Postcodes", Object.keys(postcodeGroups).length],
-                ["Completed", completed.size],
-                ["Remaining", stops.length - completed.size],
-              ].map(([label, val]) => (
-                <div key={label} style={styles.statCard}>
-                  <div style={styles.statVal}>{val}</div>
-                  <div style={styles.statLabel}>{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <MapView stops={stops} currentStop={currentStop} onGoTo={goTo} />
         )}
+
+        {/* ── SUMMARY VIEW ── */}
+        {view === "summary" && (() => {
+          const counts = {};
+          events.forEach(e => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+          const exceptions = events.filter(e => e.kind !== "delivered");
+          const dateStr = new Date().toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" });
+          return (
+            <div style={{padding:"16px 16px 100px"}}>
+              <div style={{fontSize:"11px", color:MUTED, fontWeight:700, letterSpacing:"2px", textTransform:"uppercase", marginBottom:"16px"}}>{dateStr}</div>
+
+              {/* Totals grid */}
+              <div style={styles.statsGrid}>
+                {[{kind:"delivered",label:"Delivered"},{kind:"no_access",label:"No access"},{kind:"no_answer",label:"No answer"},{kind:"neighbour",label:"Neighbour"}].map(({kind,label}) => (
+                  <div key={kind} style={styles.statCard}>
+                    <div style={{fontSize:"20px", marginBottom:"4px"}}>{OUTCOME_ICONS[kind]}</div>
+                    <div style={styles.statVal}>{kind === "delivered" ? completed.size : (counts[kind] || 0)}</div>
+                    <div style={styles.statLabel}>{label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Exceptions list */}
+              {exceptions.length > 0 && (
+                <>
+                  <div style={{fontSize:"11px", color:MUTED, fontWeight:700, letterSpacing:"2px", textTransform:"uppercase", marginTop:"20px", marginBottom:"10px"}}>
+                    Exceptions · {exceptions.length}
+                  </div>
+                  {exceptions.map((e, i) => {
+                    const s = stops.find(st => st.n === e.stop);
+                    const t = new Date(e.ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+                    return (
+                      <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px", background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", marginBottom:"6px", cursor:"pointer"}} onClick={() => goTo(stops.findIndex(x => x.n === e.stop))}>
+                        <div>
+                          <div style={{fontSize:"13px", fontWeight:600, color:TEXT}}>{s?.name || `Stop #${e.stop}`}</div>
+                          <div style={{fontSize:"11px", color:MUTED, marginTop:"2px"}}>{s?.postcode} · {t}</div>
+                        </div>
+                        <div style={{fontSize:"11px", color:"#e87e2e", fontWeight:600, textAlign:"right"}}>{OUTCOME_ICONS[e.kind]}<br/>{OUTCOME_LABELS[e.kind]}</div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {events.length === 0 && (
+                <div style={{color:MUTED, fontSize:"13px", textAlign:"center", padding:"30px 0"}}>No events logged yet.<br/><span style={{fontSize:"11px", opacity:0.6}}>Mark stops delivered or log exceptions on the 🚶 tab.</span></div>
+              )}
+
+              {/* Actions */}
+              <div style={{display:"flex", gap:"8px", marginTop:"24px"}}>
+                <button onClick={copySummary} style={{flex:1, padding:"12px", background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", fontSize:"13px", fontWeight:600, color:TEXT, cursor:"pointer"}}>📋 Copy</button>
+                <button onClick={exportJSON} style={{flex:1, padding:"12px", background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", fontSize:"13px", fontWeight:600, color:TEXT, cursor:"pointer"}}>⬇ Export</button>
+              </div>
+              <button onClick={resetDay} style={{width:"100%", marginTop:"10px", padding:"12px", background:"transparent", border:`1px solid ${BORDER}`, borderRadius:"8px", fontSize:"13px", fontWeight:600, color:MUTED, cursor:"pointer"}}>
+                🔄 Reset day (keep route)
+              </button>
+            </div>
+          );
+        })()}
 
       </div>
     </div>
@@ -948,110 +1408,119 @@ export default function PostieApp() {
 }
 
 // ── STYLES ──────────────────────────────────────────────────────────────────
+// Royal Mail red/white theme
+const R = "#E21A22"; // RM red
+const BG = "#F5F2EE"; // warm off-white page
+const CARD = "#FFFFFF";
+const BORDER = "#E0D9D2";
+const TEXT = "#111111";
+const MUTED = "#6B7280";
+const FAINT = "#F0ECE8";
+
 const styles = {
-  root: { fontFamily:"'DM Mono', monospace", background:"#111110", color:"#e8e4dc", minHeight:"100vh", maxWidth:"480px", margin:"0 auto", position:"relative", overflowX:"hidden" },
-  header: { padding:"16px 16px 12px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid #2a2a28" },
+  root: { fontFamily:"system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif", background:BG, color:TEXT, minHeight:"100vh", maxWidth:"480px", margin:"0 auto", position:"relative", overflowX:"hidden" },
+  header: { padding:"12px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", background:R, position:"sticky", top:0, zIndex:10, boxShadow:"0 1px 0 rgba(0,0,0,0.12)" },
   headerLeft: { display:"flex", alignItems:"center", gap:"10px" },
-  logo: { fontSize:"28px" },
-  routeName: { fontFamily:"'Syne', sans-serif", fontWeight:800, fontSize:"14px", color:"#fff", letterSpacing:"-0.3px" },
-  routeMeta: { fontSize:"10px", color:"#666", marginTop:"1px" },
-  progressChip: { background:"#1e1e1c", border:"1px solid #333", borderRadius:"20px", padding:"4px 10px", display:"flex", alignItems:"baseline", gap:"1px" },
-  progressNum: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"16px", color:"#f0a500" },
-  progressDen: { fontSize:"11px", color:"#555" },
-  progressBar: { height:"3px", background:"#222", width:"100%" },
-  progressFill: { height:"100%", background:"linear-gradient(90deg, #f0a500, #e06030)", transition:"width 0.4s ease" },
-  tabs: { display:"flex", borderBottom:"1px solid #2a2a28" },
-  tab: { flex:1, background:"transparent", border:"none", color:"#666", padding:"10px 4px", fontSize:"11px", cursor:"pointer", transition:"color 0.15s", letterSpacing:"0.5px" },
-  tabActive: { color:"#f0a500", boxShadow:"inset 0 -2px 0 #f0a500" },
-  content: { overflowY:"auto", height:"calc(100vh - 120px)" },
+  logo: { fontSize:"26px" },
+  routeName: { fontWeight:800, fontSize:"14px", color:"#fff", letterSpacing:"-0.2px" },
+  routeMeta: { fontSize:"10px", color:"rgba(255,255,255,0.7)", marginTop:"1px" },
+  progressChip: { background:"rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:"20px", padding:"3px 10px", display:"flex", alignItems:"baseline", gap:"1px" },
+  progressNum: { fontWeight:800, fontSize:"15px", color:"#fff" },
+  progressDen: { fontSize:"11px", color:"rgba(255,255,255,0.6)" },
+  progressBar: { height:"3px", background:"rgba(226,26,34,0.15)", width:"100%" },
+  progressFill: { height:"100%", background:R, transition:"width 0.4s ease" },
+  tabs: { display:"flex", borderBottom:`1px solid ${BORDER}`, background:CARD },
+  tab: { flex:1, background:"transparent", border:"none", color:MUTED, padding:"10px 4px", fontSize:"16px", cursor:"pointer", transition:"color 0.15s" },
+  tabActive: { color:R, boxShadow:`inset 0 -2px 0 ${R}` },
+  content: { overflowY:"auto", height:"calc(100vh - 110px)" },
 
   // Walk
-  stopCard: { background:"#1a1a18", border:"1px solid #2e2e2a", borderRadius:"12px", padding:"24px 20px", marginBottom:"16px" },
-  stopNumber: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"11px", color:"#555", letterSpacing:"2px", textTransform:"uppercase", marginBottom:"6px" },
-  stopName: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"22px", color:"#fff", lineHeight:1.2, marginBottom:"8px" },
-  stopPostcode: { fontFamily:"'DM Mono', monospace", fontSize:"13px", color:"#f0a500", background:"rgba(240,165,0,0.1)", display:"inline-block", padding:"3px 8px", borderRadius:"4px", marginBottom:"12px" },
-  noteChip: { border:"1px solid", borderRadius:"6px", padding:"8px 12px", fontSize:"12px", marginBottom:"16px", lineHeight:1.4 },
-  doneBtn: { width:"100%", padding:"12px", background:"transparent", border:"2px solid #333", color:"#666", borderRadius:"8px", cursor:"pointer", fontFamily:"'DM Mono', monospace", fontSize:"13px", transition:"all 0.2s", letterSpacing:"0.5px" },
-  doneBtnActive: { background:"rgba(76,175,61,0.12)", borderColor:"#4caf3d", color:"#4caf3d" },
-  contextRow: { display:"flex", gap:"10px", marginBottom:"16px" },
-  contextCard: { flex:1, background:"#161614", border:"1px solid #252523", borderRadius:"8px", padding:"12px", cursor:"pointer" },
-  contextCardNext: { borderColor:"#2e2a1a" },
-  contextLabel: { fontSize:"10px", color:"#555", marginBottom:"4px", letterSpacing:"1px" },
-  contextName: { fontSize:"12px", color:"#ccc", fontWeight:500, marginBottom:"2px", lineHeight:1.3 },
-  contextCode: { fontSize:"10px", color:"#f0a500" },
-  navRow: { display:"flex", alignItems:"center", gap:"12px" },
-  navBtn: { flex:1, padding:"14px", background:"#1e1e1c", border:"1px solid #333", color:"#ccc", borderRadius:"8px", cursor:"pointer", fontFamily:"'DM Mono', monospace", fontSize:"13px", transition:"all 0.15s" },
-  navBtnNext: { background:"rgba(240,165,0,0.08)", borderColor:"rgba(240,165,0,0.3)", color:"#f0a500" },
-  stopCounter: { fontSize:"11px", color:"#555", whiteSpace:"nowrap", textAlign:"center", minWidth:"60px" },
+  stopCard: { background:CARD, border:`1px solid ${BORDER}`, borderRadius:"12px", padding:"20px 18px", marginBottom:"14px", boxShadow:"0 1px 3px rgba(0,0,0,0.05)" },
+  stopNumber: { fontWeight:700, fontSize:"10px", color:MUTED, letterSpacing:"2px", textTransform:"uppercase", marginBottom:"5px" },
+  stopName: { fontWeight:800, fontSize:"22px", color:TEXT, lineHeight:1.2, marginBottom:"8px" },
+  stopPostcode: { fontSize:"12px", color:R, background:"rgba(226,26,34,0.08)", display:"inline-block", padding:"3px 8px", borderRadius:"4px", marginBottom:"12px", fontWeight:600 },
+  noteChip: { border:"1px solid", borderRadius:"6px", padding:"8px 12px", fontSize:"12px", marginBottom:"14px", lineHeight:1.4 },
+  doneBtn: { width:"100%", padding:"12px", background:"transparent", border:`2px solid ${BORDER}`, color:MUTED, borderRadius:"8px", cursor:"pointer", fontSize:"13px", transition:"all 0.2s", fontWeight:600 },
+  doneBtnActive: { background:"rgba(34,139,34,0.08)", borderColor:"#228B22", color:"#228B22" },
+  contextRow: { display:"flex", gap:"10px", marginBottom:"14px" },
+  contextCard: { flex:1, background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", padding:"12px", cursor:"pointer" },
+  contextCardNext: { borderLeft:`3px solid ${R}` },
+  contextLabel: { fontSize:"10px", color:MUTED, marginBottom:"4px", letterSpacing:"1px" },
+  contextName: { fontSize:"12px", color:TEXT, fontWeight:500, marginBottom:"2px", lineHeight:1.3 },
+  contextCode: { fontSize:"10px", color:R, fontWeight:600 },
+  navRow: { display:"flex", alignItems:"center", gap:"10px" },
+  navBtn: { flex:1, padding:"13px", background:CARD, border:`1px solid ${BORDER}`, color:TEXT, borderRadius:"8px", cursor:"pointer", fontSize:"13px", transition:"all 0.15s", fontWeight:600 },
+  navBtnNext: { background:R, borderColor:R, color:"#fff" },
+  stopCounter: { fontSize:"11px", color:MUTED, whiteSpace:"nowrap", textAlign:"center", minWidth:"60px" },
 
   // Search
-  searchInput: { width:"100%", background:"#1a1a18", border:"1px solid #333", borderRadius:"8px", padding:"14px 16px", color:"#fff", fontFamily:"'DM Mono', monospace", fontSize:"14px", outline:"none", marginBottom:"12px" },
-  searchMeta: { fontSize:"11px", color:"#555", marginBottom:"12px", letterSpacing:"0.5px" },
-  searchHint: { fontSize:"13px", color:"#666", lineHeight:1.6 },
+  searchInput: { width:"100%", background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", padding:"13px 16px", color:TEXT, fontSize:"14px", outline:"none", marginBottom:"12px" },
+  searchMeta: { fontSize:"11px", color:MUTED, marginBottom:"12px", letterSpacing:"0.5px" },
+  searchHint: { fontSize:"13px", color:MUTED, lineHeight:1.6 },
   postcodeList: { display:"flex", flexWrap:"wrap", gap:"6px", marginTop:"12px" },
-  pcChip: { background:"#1e1e1c", border:"1px solid #333", borderRadius:"4px", padding:"4px 8px", fontSize:"11px", color:"#f0a500", cursor:"pointer", letterSpacing:"0.5px" },
-  searchResult: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", background:"#161614", border:"1px solid #252523", borderRadius:"8px", marginBottom:"6px", cursor:"pointer" },
+  pcChip: { background:CARD, border:`1px solid ${BORDER}`, borderRadius:"4px", padding:"4px 8px", fontSize:"11px", color:R, cursor:"pointer", fontWeight:600 },
+  searchResult: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"13px 14px", background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", marginBottom:"6px", cursor:"pointer" },
   srLeft: { display:"flex", alignItems:"center", gap:"12px" },
-  srNum: { fontSize:"11px", color:"#555", minWidth:"28px" },
-  srName: { fontSize:"13px", color:"#ddd", marginBottom:"2px" },
-  srCode: { fontSize:"11px", color:"#f0a500" },
-  srDone: { color:"#4caf3d", fontSize:"14px", marginLeft:"8px" },
+  srNum: { fontSize:"11px", color:MUTED, minWidth:"28px" },
+  srName: { fontSize:"13px", color:TEXT, marginBottom:"2px", fontWeight:500 },
+  srCode: { fontSize:"11px", color:R, fontWeight:600 },
+  srDone: { color:"#228B22", fontSize:"14px", marginLeft:"8px" },
 
   // List
-  pcHeader: { padding:"8px 16px 4px", fontSize:"10px", color:"#f0a500", letterSpacing:"2px", background:"#0e0e0d", position:"sticky", top:0, zIndex:2, borderBottom:"1px solid #1e1e1c" },
-  listItem: { display:"flex", alignItems:"center", gap:"12px", padding:"12px 16px", borderBottom:"1px solid #1a1a18", cursor:"pointer", transition:"background 0.1s" },
-  listItemActive: { background:"rgba(240,165,0,0.06)", borderLeft:"3px solid #f0a500" },
+  pcHeader: { padding:"7px 16px", fontSize:"10px", color:R, fontWeight:700, letterSpacing:"2px", background:FAINT, position:"sticky", top:0, zIndex:2, borderBottom:`1px solid ${BORDER}` },
+  listItem: { display:"flex", alignItems:"center", gap:"12px", padding:"12px 16px", borderBottom:`1px solid ${FAINT}`, cursor:"pointer", transition:"background 0.1s" },
+  listItemActive: { background:"rgba(226,26,34,0.05)", borderLeft:`3px solid ${R}` },
   listItemDone: { opacity:0.4 },
-  liNum: { fontSize:"11px", color:"#444", minWidth:"28px", textAlign:"right" },
+  liNum: { fontSize:"11px", color:MUTED, minWidth:"28px", textAlign:"right" },
   liBody: { flex:1 },
-  liName: { fontSize:"13px", color:"#ccc" },
-  liCheck: { fontSize:"12px", color:"#4caf3d" },
-  liCurrent: { fontSize:"10px", color:"#f0a500" },
+  liName: { fontSize:"13px", color:TEXT, fontWeight:500 },
+  liCheck: { fontSize:"12px", color:"#228B22" },
+  liCurrent: { fontSize:"10px", color:R },
 
   // Routes
-  sectionTitle: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"11px", color:"#555", letterSpacing:"2px", textTransform:"uppercase", marginBottom:"12px", marginTop:"8px" },
-  routeCard: { background:"#161614", border:"1px solid #252523", borderRadius:"10px", padding:"16px", marginBottom:"10px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"space-between" },
-  routeCardActive: { borderColor:"rgba(240,165,0,0.4)", background:"rgba(240,165,0,0.04)" },
+  sectionTitle: { fontWeight:800, fontSize:"10px", color:MUTED, letterSpacing:"2px", textTransform:"uppercase", marginBottom:"12px", marginTop:"8px" },
+  routeCard: { background:CARD, border:`1px solid ${BORDER}`, borderRadius:"10px", padding:"14px", marginBottom:"8px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"space-between", boxShadow:"0 1px 2px rgba(0,0,0,0.04)" },
+  routeCardActive: { borderColor:`rgba(226,26,34,0.5)`, background:"rgba(226,26,34,0.03)" },
   rcLeft: { flex:1 },
-  rcName: { fontFamily:"'Syne',sans-serif", fontWeight:700, fontSize:"14px", color:"#fff", marginBottom:"4px" },
-  rcMeta: { fontSize:"11px", color:"#666", marginBottom:"4px" },
-  rcAreas: { fontSize:"11px", color:"#444" },
-  rcActive: { fontSize:"10px", color:"#f0a500", border:"1px solid rgba(240,165,0,0.4)", borderRadius:"20px", padding:"3px 8px", letterSpacing:"1px" },
-  addRoute: { border:"2px dashed #2a2a28", borderRadius:"10px", padding:"20px 16px", marginBottom:"20px", display:"flex", alignItems:"center", gap:"16px", cursor:"pointer" },
-  addRouteIcon: { fontSize:"24px", color:"#444", width:"40px", height:"40px", border:"2px dashed #333", borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center" },
-  addRouteTitle: { fontFamily:"'Syne',sans-serif", fontWeight:700, fontSize:"13px", color:"#555", marginBottom:"3px" },
-  addRouteSub: { fontSize:"11px", color:"#3a3a38", lineHeight:1.4 },
+  rcName: { fontWeight:700, fontSize:"14px", color:TEXT, marginBottom:"3px" },
+  rcMeta: { fontSize:"11px", color:MUTED, marginBottom:"3px" },
+  rcAreas: { fontSize:"11px", color:MUTED, opacity:0.7 },
+  rcActive: { fontSize:"10px", color:R, border:`1px solid rgba(226,26,34,0.4)`, borderRadius:"20px", padding:"3px 8px", fontWeight:700 },
+  addRoute: { border:`2px dashed ${BORDER}`, borderRadius:"10px", padding:"18px 14px", marginBottom:"18px", display:"flex", alignItems:"center", gap:"14px", cursor:"pointer" },
+  addRouteIcon: { fontSize:"22px", color:MUTED, width:"38px", height:"38px", border:`2px dashed ${BORDER}`, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center" },
+  addRouteTitle: { fontWeight:700, fontSize:"13px", color:MUTED, marginBottom:"3px" },
+  addRouteSub: { fontSize:"11px", color:MUTED, opacity:0.7, lineHeight:1.4 },
   statsGrid: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px" },
-  statCard: { background:"#161614", border:"1px solid #252523", borderRadius:"8px", padding:"16px", textAlign:"center" },
-  statVal: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"28px", color:"#f0a500" },
-  statLabel: { fontSize:"10px", color:"#555", marginTop:"4px", letterSpacing:"1px", textTransform:"uppercase" },
+  statCard: { background:CARD, border:`1px solid ${BORDER}`, borderRadius:"8px", padding:"14px", textAlign:"center" },
+  statVal: { fontWeight:800, fontSize:"26px", color:R },
+  statLabel: { fontSize:"10px", color:MUTED, marginTop:"3px", letterSpacing:"1px", textTransform:"uppercase" },
 
   // Scanner
-  scanFrame: { position:"relative", width:"100%", aspectRatio:"1/1", background:"#0a0a09", borderRadius:"12px", overflow:"hidden", border:"1px solid #2e2e2a" },
+  scanFrame: { position:"relative", width:"100%", aspectRatio:"1/1", background:"#111", borderRadius:"12px", overflow:"hidden", border:`1px solid ${BORDER}` },
   scanVideo: { width:"100%", height:"100%", objectFit:"cover", display:"block" },
   scanOverlay: { position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:"16px" },
-  scanTarget: { width:"180px", height:"180px", border:"2px solid rgba(240,165,0,0.7)", borderRadius:"12px", boxShadow:"0 0 0 4000px rgba(0,0,0,0.45)" },
-  scanHint: { fontSize:"12px", color:"rgba(240,165,0,0.8)", letterSpacing:"1px", textTransform:"uppercase" },
-  scanSpinner: { fontSize:"13px", color:"#666" },
-  scanManualLabel: { fontSize:"10px", color:"#555", letterSpacing:"1.5px", textTransform:"uppercase" },
-  scanSubmitBtn: { background:"rgba(240,165,0,0.12)", border:"1px solid rgba(240,165,0,0.4)", color:"#f0a500", borderRadius:"8px", padding:"0 20px", fontFamily:"'DM Mono',monospace", fontSize:"13px", cursor:"pointer" },
+  scanTarget: { width:"180px", height:"180px", border:`2px solid rgba(226,26,34,0.85)`, borderRadius:"12px", boxShadow:"0 0 0 4000px rgba(0,0,0,0.5)" },
+  scanHint: { fontSize:"12px", color:"rgba(255,255,255,0.85)", letterSpacing:"1px", textTransform:"uppercase" },
+  scanSpinner: { fontSize:"13px", color:"rgba(255,255,255,0.6)" },
+  scanManualLabel: { fontSize:"10px", color:MUTED, letterSpacing:"1.5px", textTransform:"uppercase" },
+  scanSubmitBtn: { background:R, border:`1px solid ${R}`, color:"#fff", borderRadius:"8px", padding:"0 20px", fontSize:"13px", cursor:"pointer", fontWeight:700 },
   scanExamples: { display:"flex", flexWrap:"wrap", gap:"6px", marginTop:"12px" },
 
   // Frames
   frameHeader: { display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:"12px" },
-  frameTitle: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"20px", color:"#fff" },
-  frameCount: { fontSize:"11px", color:"#555", letterSpacing:"1px" },
+  frameTitle: { fontWeight:800, fontSize:"20px", color:TEXT },
+  frameCount: { fontSize:"11px", color:MUTED, letterSpacing:"1px" },
   framePicker: { display:"flex", flexWrap:"wrap", gap:"8px", marginBottom:"16px" },
-  frameBtn: { width:"44px", height:"44px", borderRadius:"8px", border:"1px solid #2e2e2a", background:"#161614", color:"#666", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:"1px", transition:"all 0.15s" },
-  frameBtnActive: { background:"rgba(240,165,0,0.1)", borderColor:"rgba(240,165,0,0.5)", color:"#f0a500" },
-  frameBtnNum: { fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:"16px", lineHeight:1 },
-  frameBtnCount: { fontSize:"9px", color:"#555", lineHeight:1 },
-  frameEmpty: { color:"#555", fontSize:"13px", padding:"20px 0", lineHeight:1.6 },
-  frameItem: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 0", borderBottom:"1px solid #1a1a18", cursor:"pointer" },
+  frameBtn: { width:"44px", height:"44px", borderRadius:"8px", border:`1px solid ${BORDER}`, background:CARD, color:MUTED, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:"1px", transition:"all 0.15s" },
+  frameBtnActive: { background:R, borderColor:R, color:"#fff" },
+  frameBtnNum: { fontWeight:800, fontSize:"16px", lineHeight:1 },
+  frameBtnCount: { fontSize:"9px", lineHeight:1, opacity:0.7 },
+  frameEmpty: { color:MUTED, fontSize:"13px", padding:"20px 0", lineHeight:1.6 },
+  frameItem: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"13px 0", borderBottom:`1px solid ${FAINT}`, cursor:"pointer" },
   frameItemDone: { opacity:0.35 },
   frameItemLeft: { flex:1 },
-  frameItemName: { fontSize:"14px", color:"#ddd", fontWeight:500, marginBottom:"2px" },
-  frameItemCode: { fontSize:"11px", color:"#f0a500", letterSpacing:"0.5px" },
+  frameItemName: { fontSize:"14px", color:TEXT, fontWeight:500, marginBottom:"2px" },
+  frameItemCode: { fontSize:"11px", color:R, fontWeight:600 },
   frameItemRight: { textAlign:"right", paddingLeft:"12px" },
-  frameItemN: { fontSize:"11px", color:"#444" },
+  frameItemN: { fontSize:"11px", color:MUTED },
 };
