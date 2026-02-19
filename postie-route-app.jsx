@@ -480,6 +480,15 @@ const searchStops = (query, stops) => {
   );
 };
 
+// Zone indicator for frame sorting
+const getZone = (pct) => {
+  if (pct < 0.2) return { label: "VERY TOP",  color: "#2563eb" };
+  if (pct < 0.4) return { label: "EARLY",     color: "#059669" };
+  if (pct < 0.6) return { label: "MIDDLE",    color: "#d97706" };
+  if (pct < 0.8) return { label: "LATE",      color: "#dc2626" };
+  return             { label: "END",       color: "#7c3aed" };
+};
+
 // Human-readable label from QR box ID: "RUAN_POST_OFFICE" → "Ruan Post Office"
 const boxLabel = (qrId) =>
   qrId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
@@ -836,6 +845,7 @@ export default function PostieApp() {
     return route.stops;
   });
   const [adhocPhase, setAdhocPhase] = useState(null); // null | "gps" | "listening" | "done"
+  const [editingFrame, setEditingFrame] = useState(false);
 
   const stop = stops[currentStop];
   const prevStop = currentStop > 0 ? stops[currentStop - 1] : null;
@@ -922,6 +932,15 @@ export default function PostieApp() {
       setCompleted(prev => { const n = new Set(prev); n.add(stopN); return n; });
     }
     speak(OUTCOME_LABELS[kind] + " logged.");
+  };
+
+  // Reset frame editing state when stop changes
+  useEffect(() => { setEditingFrame(false); }, [currentStop]);
+
+  const saveFrame = (val) => {
+    const v = val.trim().toUpperCase();
+    setStops(prev => prev.map(s => s.n === stop.n ? { ...s, frame: v || undefined } : s));
+    setEditingFrame(false);
   };
 
   const addHouseAfterCurrentStop = async () => {
@@ -1185,8 +1204,41 @@ export default function PostieApp() {
             {/* Stop card */}
             {(() => {
               const stopExceptions = events.filter(e => e.stop === stop.n && e.kind !== "delivered");
+              const pct = (currentStop + 1) / stops.length;
+              const zone = getZone(pct);
               return (
                 <div className="stop-card" key={stop.n} style={styles.stopCard}>
+                  {/* Zone / frame position indicator */}
+                  <div style={{marginBottom:"14px"}}>
+                    <div style={{fontSize:"22px", fontWeight:800, color:zone.color, letterSpacing:"1px", lineHeight:1, marginBottom:"6px"}}>{zone.label}</div>
+                    <div style={{height:"10px", background:FAINT, borderRadius:"5px", overflow:"hidden"}}>
+                      <div style={{height:"100%", width:`${Math.round(pct*100)}%`, background:zone.color, borderRadius:"5px", transition:"width 0.3s ease"}} />
+                    </div>
+                    <div style={{fontSize:"10px", color:MUTED, marginTop:"4px", letterSpacing:"0.5px"}}>{Math.round(pct*100)}% through round · stop {currentStop+1} of {stops.length}</div>
+                  </div>
+                  {/* Frame slot */}
+                  <div style={{display:"flex", alignItems:"center", gap:"10px", marginBottom:"14px", paddingBottom:"14px", borderBottom:`1px solid ${FAINT}`}}>
+                    {editingFrame ? (
+                      <input
+                        autoFocus
+                        defaultValue={stop.frame || ""}
+                        placeholder="e.g. C14"
+                        maxLength={6}
+                        style={{fontSize:"26px", fontWeight:800, color:TEXT, border:`2px solid ${R}`, borderRadius:"8px", padding:"6px 12px", width:"120px", outline:"none", letterSpacing:"2px", textTransform:"uppercase"}}
+                        onKeyDown={e => { if (e.key === "Enter") saveFrame(e.target.value); if (e.key === "Escape") setEditingFrame(false); }}
+                        onBlur={e => saveFrame(e.target.value)}
+                      />
+                    ) : (
+                      <>
+                        <span style={{fontSize:"26px", fontWeight:800, color: stop.frame ? TEXT : MUTED, letterSpacing:"1px"}}>
+                          {stop.frame ? `FRAME: ${stop.frame}` : "FRAME: —"}
+                        </span>
+                        <button onClick={() => setEditingFrame(true)} style={{fontSize:"11px", color: stop.frame ? MUTED : R, background:"transparent", border:`1px solid ${stop.frame ? BORDER : R}`, borderRadius:"5px", padding:"4px 10px", cursor:"pointer", fontWeight:600}}>
+                          {stop.frame ? "✏️ Edit" : "Set"}
+                        </button>
+                      </>
+                    )}
+                  </div>
                   <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"5px"}}>
                     <div style={styles.stopNumber}>#{stop.n}</div>
                     {stopExceptions.length > 0 && (
